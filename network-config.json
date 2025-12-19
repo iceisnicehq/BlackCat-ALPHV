@@ -1,0 +1,37 @@
+{
+    "subnet": "192.168.53.0",
+    "windows_ports": [445, 135, 139, 3389, 5985, 5986],
+    "linux_ports": [22, 2222],
+    "credentials": [
+      {
+        "username": "Administrator",
+        "password": "",
+        "domain": ""
+      },
+      {
+        "username": "administrator",
+        "password": "",
+        "domain": ""
+      },
+      {
+        "username": "suser",
+        "password": "P@ssw0rd",
+        "domain": ""
+      },
+      {
+        "username": "user",
+        "password": "password123",
+        "domain": ""
+      },
+      {
+        "username": "admin",
+        "password": "admin123",
+        "domain": ""
+      }
+    ],
+    "ssh_keys": [
+      "/root/.ssh/id_rsa",
+      "/home/user/.ssh/id_rsa",
+      "/home/ubuntu/.ssh/id_rsa"
+    ]
+  }
