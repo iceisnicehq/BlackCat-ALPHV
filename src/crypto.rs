@@ -1,9 +1,8 @@
 // src/crypto.rs
 use aes_gcm::{Aes256Gcm, Nonce, Key, aead::Aead};
-use aes_gcm::KeyInit as AesKeyInit;
+use aes_gcm::KeyInit;
 use chacha20poly1305::ChaCha20Poly1305;
 use rand::Rng;
-use std::error::Error;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,7 +18,7 @@ pub struct CryptoEngine {
 }
 
 impl CryptoEngine {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let mut rng = rand::thread_rng();
         let mut master_key = [0u8; 32];
         rng.fill(&mut master_key);
@@ -28,6 +27,10 @@ impl CryptoEngine {
 
     pub fn from_key(key: [u8; 32]) -> Self {
         CryptoEngine { master_key: key }
+    }
+
+    pub fn get_master_key(&self) -> [u8; 32] {
+        self.master_key
     }
 
     pub fn encrypt_aes_256(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -83,14 +86,6 @@ impl CryptoEngine {
         Ok(result)
     }
 
-    pub fn encrypt_file(&self, content: &[u8], use_chacha20: bool) -> Result<Vec<u8>, CryptoError> {
-        if use_chacha20 {
-            self.encrypt_chacha20(content)
-        } else {
-            self.encrypt_aes_256(content)
-        }
-    }
-
     pub fn decrypt_chacha20(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if ciphertext.len() < 12 {
             return Err(CryptoError::DecryptionFailed("Too short".to_string()));
@@ -106,15 +101,19 @@ impl CryptoEngine {
             .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
     }
 
+    pub fn encrypt_file(&self, content: &[u8], use_chacha20: bool) -> Result<Vec<u8>, CryptoError> {
+        if use_chacha20 {
+            self.encrypt_chacha20(content)
+        } else {
+            self.encrypt_aes_256(content)
+        }
+    }
+
     pub fn decrypt_file(&self, content: &[u8], use_chacha20: bool) -> Result<Vec<u8>, CryptoError> {
         if use_chacha20 {
             self.decrypt_chacha20(content)
         } else {
             self.decrypt_aes_256(content)
         }
-    }
-
-    pub fn get_master_key(&self) -> [u8; 32] {
-        self.master_key
     }
 }

