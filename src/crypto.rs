@@ -2,7 +2,6 @@
 use aes_gcm::{Aes256Gcm, Nonce, Key, aead::Aead};
 use aes_gcm::KeyInit as AesKeyInit;
 use chacha20poly1305::ChaCha20Poly1305;
-use chacha20poly1305::KeyInit;
 use rand::Rng;
 use std::error::Error;
 use thiserror::Error;
@@ -70,8 +69,8 @@ impl CryptoEngine {
         let mut nonce_array = [0u8; 12];
         rng.fill(&mut nonce_array);
 
-        let key = Key::<ChaCha20Poly1305>::from(self.master_key);
-        let cipher = ChaCha20Poly1305::new(&key);
+        let key = Key::<ChaCha20Poly1305>::from_slice(&self.master_key);
+        let cipher = ChaCha20Poly1305::new(key);
         let nonce = Nonce::from_slice(&nonce_array);
 
         let ciphertext = cipher
@@ -98,8 +97,8 @@ impl CryptoEngine {
         }
 
         let (nonce_array, encrypted_data) = ciphertext.split_at(12);
-        let key = Key::<ChaCha20Poly1305>::from(self.master_key);
-        let cipher = ChaCha20Poly1305::new(&key);
+        let key = Key::<ChaCha20Poly1305>::from_slice(&self.master_key);
+        let cipher = ChaCha20Poly1305::new(key);
         let nonce = Nonce::from_slice(nonce_array);
 
         cipher
