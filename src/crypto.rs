@@ -26,6 +26,10 @@ impl CryptoEngine {
         Ok(CryptoEngine { master_key })
     }
 
+    pub fn from_key(key: [u8; 32]) -> Self {
+        CryptoEngine { master_key: key }
+    }
+
     pub fn encrypt_aes_256(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let mut rng = rand::thread_rng();
         let mut nonce_array = [0u8; 12];
@@ -84,6 +88,29 @@ impl CryptoEngine {
             self.encrypt_chacha20(content)
         } else {
             self.encrypt_aes_256(content)
+        }
+    }
+
+pub fn decrypt_chacha20(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        if ciphertext.len() < 12 {
+            return Err(CryptoError::DecryptionFailed("Too short".to_string()));
+        }
+
+        let (nonce_array, encrypted_data) = ciphertext.split_at(12);
+        let key = Key::<ChaCha20Poly1305>::from(self.master_key);
+        let cipher = ChaCha20Poly1305::new(&key);
+        let nonce = Nonce::from_slice(nonce_array);
+
+        cipher
+            .decrypt(nonce, encrypted_data)
+            .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
+    }
+
+    pub fn decrypt_file(&self, content: &[u8], use_chacha20: bool) -> Result<Vec<u8>, CryptoError> {
+        if use_chacha20 {
+            self.decrypt_chacha20(content)
+        } else {
+            self.decrypt_aes_256(content)
         }
     }
 

