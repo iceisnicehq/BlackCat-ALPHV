@@ -1,7 +1,8 @@
+// src/crypto.rs
 use aes_gcm::{Aes256Gcm, Nonce, Key, aead::Aead};
 use aes_gcm::KeyInit as AesKeyInit;
 use chacha20poly1305::ChaCha20Poly1305;
-use chacha20poly1305::KeyInit as ChaChaKeyInit;
+use chacha20poly1305::KeyInit;
 use rand::Rng;
 use std::error::Error;
 use thiserror::Error;
@@ -91,7 +92,7 @@ impl CryptoEngine {
         }
     }
 
-pub fn decrypt_chacha20(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    pub fn decrypt_chacha20(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         if ciphertext.len() < 12 {
             return Err(CryptoError::DecryptionFailed("Too short".to_string()));
         }

